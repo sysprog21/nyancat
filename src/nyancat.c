@@ -221,8 +221,7 @@ void SIGWINCH_handler(int sig)
  */
 void newline(int n)
 {
-    int i = 0;
-    for (i = 0; i < n; ++i) {
+    for (int i = 0; i < n; ++i) {
         /* We will send `n` linefeeds to the client */
         putc('\n', stdout);
     }
@@ -257,7 +256,6 @@ void usage(char *argv[])
 
 int main(int argc, char **argv)
 {
-    unsigned int k;
     int ttype;
 
     /* Long option names */
@@ -345,15 +343,13 @@ int main(int argc, char **argv)
 
     if (term) {
         /* Convert the entire terminal string to lower case */
-        for (k = 0; k < strlen(term); ++k) {
+        for (size_t k = 0; k < strlen(term); ++k) {
             term[k] = tolower(term[k]);
         }
 
         /* Do our terminal detection */
         if (strstr(term, "xterm")) {
             ttype = 1; /* 256-color, spaces */
-        } else if (strstr(term, "toaru")) {
-            ttype = 1; /* emulates xterm */
         } else if (strstr(term, "linux")) {
             ttype = 3; /* Spaces and blink attribute */
         } else if (strstr(term, "vtnt")) {
@@ -371,8 +367,7 @@ int main(int argc, char **argv)
         } else if (strstr(term, "vt100") && terminal_width == 40) {
             ttype = 7; /* No color support, only 40 columns */
         } else if (!strncmp(term, "st", 2)) {
-            ttype =
-                1; /* suckless simple terminal is xterm-256color-compatible */
+            ttype = 1; /* simple terminal is xterm-256color-compatible */
         }
     }
 
@@ -560,16 +555,13 @@ int main(int argc, char **argv)
                 if (y > 23 && y < 43 && x < 0) {
                     /*
                      * Generate the rainbow tail.
-                     *
                      * This is done with a pretty simplistic square wave.
                      */
                     int mod_x = ((-x + 2) % 16) / 8;
                     if ((i / 2) % 2) {
                         mod_x = 1 - mod_x;
                     }
-                    /*
-                     * Our rainbow, with some padding.
-                     */
+                    /* Our rainbow, with some padding. */
                     const char *rainbow = ",,>>&&&+++###==;;;,,";
                     color = rainbow[mod_x + y - 23];
                     if (color == 0)
@@ -587,8 +579,7 @@ int main(int argc, char **argv)
                     printf("%s", colors[(int) color]);
                 } else {
                     if (color != last && colors[(int) color]) {
-                        /* Normal Mode, send escape (because the color changed)
-                         */
+                        /* Normal Mode, send escape (because color changed) */
                         last = color;
                         printf("%s%s", colors[(int) color], output);
                     } else {

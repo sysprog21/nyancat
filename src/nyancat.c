@@ -12,10 +12,12 @@
  * Build tools unified by:  Aaron Peschel
  *                          https://github.com/apeschel
  *
+ * Modified by: National Cheng Kung University
+ *
  * For a complete listing of contributors, please see the git commit history.
  *
- * This is a simple telnet server / standalone application which renders the
- * classic Nyan Cat (or "poptart cat") to your terminal.
+ * This is a standalone application which renders the classic Nyan Cat (or
+ * "poptart cat") to your terminal.
  *
  * It makes use of various ANSI escape sequences to render color, or in the case
  * of a VT220, simply dumps text to the screen.
@@ -76,14 +78,6 @@
 #endif
 
 /*
- * telnet.h contains some #defines for the various
- * commands, escape characters, and modes for telnet.
- * (it surprises some people that telnet is, really,
- *  a protocol, and not just raw text transmission)
- */
-#include "telnet.h"
-
-/*
  * The animation frames are stored separately in
  * this header so they don't clutter the core source
  */
@@ -101,11 +95,6 @@ const char *colors[256] = {NULL};
  * we will use block characters (or even nothing)
  */
 const char *output = "  ";
-
-/*
- * Are we currently in telnet mode?
- */
-int telnet = 0;
 
 /*
  * Whether or not to show the counter
@@ -201,16 +190,6 @@ void SIGINT_handler(int sig)
     finish();
 }
 
-/*
- * Handle the loss of stdout, as would be the case when
- * in telnet mode and the client disconnects
- */
-void SIGPIPE_handler(int sig)
-{
-    (void) sig;
-    finish();
-}
-
 void update_window_size()
 {
     if (using_automatic_width) {
@@ -245,85 +224,7 @@ void newline(int n)
     int i = 0;
     for (i = 0; i < n; ++i) {
         /* We will send `n` linefeeds to the client */
-        if (telnet) {
-            /* Send the telnet newline sequence */
-            putc('\r', stdout);
-            putc(0, stdout);
-            putc('\n', stdout);
-        } else {
-            /* Send a regular line feed */
-            putc('\n', stdout);
-        }
-    }
-}
-
-/*
- * These are the options we want to use as
- * a telnet server. These are set in set_options()
- */
-unsigned char telnet_options[256] = {0};
-unsigned char telnet_willack[256] = {0};
-
-/*
- * These are the values we have set or
- * agreed to during our handshake.
- * These are set in send_command(...)
- */
-unsigned char telnet_do_set[256] = {0};
-unsigned char telnet_will_set[256] = {0};
-
-/*
- * Set the default options for the telnet server.
- */
-void set_options()
-{
-    /* We will not echo input */
-    telnet_options[ECHO] = WONT;
-    /* We will set graphics modes */
-    telnet_options[SGA] = WILL;
-    /* We will not set new environments */
-    telnet_options[NEW_ENVIRON] = WONT;
-
-    /* The client should echo its own input */
-    telnet_willack[ECHO] = DO;
-    /* The client can set a graphics mode */
-    telnet_willack[SGA] = DO;
-    /* The client should not change, but it should tell us its window size */
-    telnet_willack[NAWS] = DO;
-    /* The client should tell us its terminal type (very important) */
-    telnet_willack[TTYPE] = DO;
-    /* No linemode */
-    telnet_willack[LINEMODE] = DONT;
-    /* And the client can set a new environment */
-    telnet_willack[NEW_ENVIRON] = DO;
-}
-
-/*
- * Send a command (cmd) to the telnet client
- * Also does special handling for DO/DONT/WILL/WONT
- */
-void send_command(int cmd, int opt)
-{
-    /* Send a command to the telnet client */
-    if (cmd == DO || cmd == DONT) {
-        /* DO commands say what the client should do. */
-        if (((cmd == DO) && (telnet_do_set[opt] != DO)) ||
-            ((cmd == DONT) && (telnet_do_set[opt] != DONT))) {
-            /* And we only send them if there is a disagreement */
-            telnet_do_set[opt] = cmd;
-            printf("%c%c%c", IAC, cmd, opt);
-        }
-    } else if (cmd == WILL || cmd == WONT) {
-        /* Similarly, WILL commands say what the server will do. */
-        if (((cmd == WILL) && (telnet_will_set[opt] != WILL)) ||
-            ((cmd == WONT) && (telnet_will_set[opt] != WONT))) {
-            /* And we only send them during disagreements */
-            telnet_will_set[opt] = cmd;
-            printf("%c%c%c", IAC, cmd, opt);
-        }
-    } else {
-        /* Other commands are sent raw */
-        printf("%c%c", IAC, cmd);
+        putc('\n', stdout);
     }
 }
 
@@ -337,9 +238,6 @@ void usage(char *argv[])
         "\n"
         "usage: %s [-hitn] [-f \033[3mframes\033[0m]\n"
         "\n"
-        " -i --intro      \033[3mShow the introduction / about information at "
-        "startup.\033[0m\n"
-        " -t --telnet     \033[3mTelnet mode.\033[0m\n"
         " -n --no-counter \033[3mDo not display the timer\033[0m\n"
         " -s --no-title   \033[3mDo not set the titlebar text\033[0m\n"
         " -e --no-clear   \033[3mDo not clear the display between "
@@ -357,123 +255,13 @@ void usage(char *argv[])
         argv[0]);
 }
 
-void *telnet_handler(void *arg)
-{
-    (void) arg;
-    uint32_t sb_mode = 0;
-
-    /* Various pieces for the telnet communication */
-    unsigned char sb[1024] = {0};
-    unsigned short sb_len = 0;
-
-    int i;
-
-    while ((i = getchar()) != EOF) {
-        /* Get either IAC (start command) or a regular character (break, unless
-         * in SB mode) */
-        unsigned char opt = 0;
-        unsigned char c = i;
-
-        if (c == IAC) {
-            /* If IAC, get the command */
-            c = getchar();
-            switch (c) {
-            case SE:
-                /* End of extended option mode */
-                sb_mode = 0;
-                if (sb[0] == TTYPE) {
-                    /* This was a response to the TTYPE command, meaning
-                     * that this should be a terminal type */
-                    term = strndup((char *) &sb[2], sizeof(sb) - 2);
-                } else if (sb[0] == NAWS) {
-                    /* This was a response to the NAWS command, meaning
-                     * that this should be a window size */
-                    terminal_width = (sb[1] << 8) | sb[2];
-                    terminal_height = (sb[3] << 8) | sb[4];
-                    update_window_size();
-                }
-                break;
-            case NOP:
-                /* No Op */
-                send_command(NOP, 0);
-                fflush(stdout);
-                break;
-            case WILL:
-            case WONT:
-                /* Will / Won't Negotiation */
-                opt = getchar();
-                if (!telnet_willack[opt]) {
-                    /* We default to WONT */
-                    telnet_willack[opt] = WONT;
-                }
-                send_command(telnet_willack[opt], opt);
-                fflush(stdout);
-                if ((c == WILL) && (opt == TTYPE)) {
-                    /* WILL TTYPE? Great, let's do that now! */
-                    pthread_mutex_lock(&print_lock);
-                    printf("%c%c%c%c%c%c", IAC, SB, TTYPE, SEND, IAC, SE);
-                    fflush(stdout);
-                    pthread_mutex_unlock(&print_lock);
-                }
-                break;
-            case DO:
-            case DONT:
-                /* Do / Don't Negotiation */
-                opt = getchar();
-                if (!telnet_options[opt]) {
-                    /* We default to DONT */
-                    telnet_options[opt] = DONT;
-                }
-                send_command(telnet_options[opt], opt);
-                fflush(stdout);
-                break;
-            case SB:
-                /* Begin Extended Option Mode */
-                sb_mode = 1;
-                sb_len = 0;
-                memset(sb, 0, sizeof(sb));
-                break;
-            case IAC:
-                /* IAC IAC? That's probably not right. */
-                break;
-            default:
-                break;
-            }
-        } else if (sb_mode) {
-            /* Extended Option Mode -> Accept character */
-            if (sb_len < sizeof(sb) - 1) {
-                /* Append this character to the SB string,
-                 * but only if it doesn't put us over
-                 * our limit; honestly, we shouldn't hit
-                 * the limit, as we're only collecting characters
-                 * for a terminal type or window size, but better safe than
-                 * sorry (and vulnerable).
-                 */
-                sb[sb_len] = c;
-                sb_len++;
-            }
-        }
-    }
-
-    return NULL;
-}
-
 int main(int argc, char **argv)
 {
     unsigned int k;
     int ttype;
 
-    /* Whether or not to show the MOTD intro */
-    char show_intro = 0;
-    char skip_intro = 0;
-
-    pthread_t telnet_handler_thread;
-
     /* Long option names */
     static struct option long_opts[] = {{"help", no_argument, 0, 'h'},
-                                        {"telnet", no_argument, 0, 't'},
-                                        {"intro", no_argument, 0, 'i'},
-                                        {"skip-intro", no_argument, 0, 'I'},
                                         {"no-counter", no_argument, 0, 'n'},
                                         {"no-title", no_argument, 0, 's'},
                                         {"no-clear", no_argument, 0, 'e'},
@@ -501,15 +289,6 @@ int main(int argc, char **argv)
             break;
         case 's':
             set_title = 0;
-            break;
-        case 'i': /* Show introduction */
-            show_intro = 1;
-            break;
-        case 'I':
-            skip_intro = 1;
-            break;
-        case 't': /* Expect telnet bits */
-            telnet = 1;
             break;
         case 'h': /* Show help and exit */
             usage(argv);
@@ -551,42 +330,15 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (telnet) {
-        /* Telnet mode */
-        uint32_t option = 0;
+    /* We are running standalone, retrieve the
+     * terminal type from the environment. */
+    term = getenv("TERM");
 
-        /* show_intro is implied unless skip_intro was set */
-        show_intro = (skip_intro == 0) ? 1 : 0;
-
-        /* Set the default options */
-        set_options();
-
-        /* Let the client know what we're using */
-        for (option = 0; option < sizeof(telnet_options); option++) {
-            if (telnet_options[option]) {
-                send_command(telnet_options[option], option);
-                fflush(stdout);
-            }
-        }
-        for (option = 0; option < sizeof(telnet_willack); option++) {
-            if (telnet_willack[option]) {
-                send_command(telnet_willack[option], option);
-                fflush(stdout);
-            }
-        }
-
-        pthread_create(&telnet_handler_thread, NULL, telnet_handler, NULL);
-    } else {
-        /* We are running standalone, retrieve the
-         * terminal type from the environment. */
-        term = getenv("TERM");
-
-        /* Also get the number of columns */
-        struct winsize w;
-        ioctl(0, TIOCGWINSZ, &w);
-        terminal_width = w.ws_col;
-        terminal_height = w.ws_row;
-    }
+    /* Also get the number of columns */
+    struct winsize w;
+    ioctl(0, TIOCGWINSZ, &w);
+    terminal_width = w.ws_col;
+    terminal_height = w.ws_row;
 
     /* Default ttype */
     ttype = 2;
@@ -629,13 +381,8 @@ int main(int argc, char **argv)
     /* Accept ^C -> restore cursor */
     signal(SIGINT, SIGINT_handler);
 
-    /* Handle loss of stdout */
-    signal(SIGPIPE, SIGPIPE_handler);
-
     /* Handle window changes */
-    if (!telnet) {
-        signal(SIGWINCH, SIGWINCH_handler);
-    }
+    signal(SIGWINCH, SIGWINCH_handler);
 
     switch (ttype) {
     case 1:
@@ -783,54 +530,6 @@ int main(int argc, char **argv)
         printf("\033[H\033[2J\033[?25l");
     } else {
         printf("\033[s");
-    }
-
-    if (show_intro) {
-        /* Display the MOTD */
-        unsigned int countdown_clock = 5;
-        for (k = 0; k < countdown_clock; ++k) {
-            newline(3);
-            printf(
-                "                             \033[1mNyancat Telnet "
-                "Server\033[0m");
-            newline(2);
-            printf(
-                "                   written and run by \033[1;32mKevin "
-                "Lange\033[1;34m @kevinlange\033[0m");
-            newline(2);
-            printf("        If things don't look right, try:");
-            newline(1);
-            printf("                TERM=fallback telnet ...");
-            newline(2);
-            printf("        Or on Windows:");
-            newline(1);
-            printf("                telnet -t vtnt ...");
-            newline(2);
-            printf("        Problems? Check the website:");
-            newline(1);
-            printf("                \033[1;34mhttp://nyancat.dakko.us\033[0m");
-            newline(2);
-            printf(
-                "        This is a telnet server, remember your escape keys!");
-            newline(1);
-            printf("                \033[1;31m^]quit\033[0m to exit");
-            newline(2);
-            printf("        Starting in %d...                \n",
-                   countdown_clock - k);
-
-            fflush(stdout);
-            usleep(400000);
-            if (clear_screen) {
-                printf("\033[H"); /* Reset cursor */
-            } else {
-                printf("\033[u");
-            }
-        }
-
-        if (clear_screen) {
-            /* Clear the screen again */
-            printf("\033[H\033[2J\033[?25l");
-        }
     }
 
     pthread_mutex_unlock(&print_lock);

@@ -57,7 +57,6 @@
 #include <ctype.h>
 #include <getopt.h>
 #include <pthread.h>
-#include <setjmp.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>

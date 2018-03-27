@@ -119,6 +119,26 @@ int clear_screen = 1;
 int set_title = 1;
 
 /*
+ * Benchmarking mode.
+ */
+int bench = 0;
+
+static double diff_in_second(struct timespec t1, struct timespec t2)
+{
+    struct timespec diff;
+    if (t2.tv_nsec - t1.tv_nsec < 0) {
+        diff.tv_sec = t2.tv_sec - t1.tv_sec - 1;
+        diff.tv_nsec = t2.tv_nsec - t1.tv_nsec + 1000000000;
+    } else {
+        diff.tv_sec = t2.tv_sec - t1.tv_sec;
+        diff.tv_nsec = t2.tv_nsec - t1.tv_nsec;
+    }
+    return (diff.tv_sec + diff.tv_nsec / 1000000000.0);
+}
+
+static struct timespec start, end;
+
+/*
  * Lock of print
  */
 pthread_mutex_t print_lock;
@@ -176,6 +196,13 @@ void finish()
     } else {
         printf("\033[0m\n");
     }
+
+    if (bench) {
+        clock_gettime(CLOCK_REALTIME, &end);
+        fprintf(stderr, "Execution time: %lf sec\n",
+                diff_in_second(start, end));
+    }
+
     pthread_mutex_destroy(&print_lock);
     exit(0);
 }
@@ -250,6 +277,7 @@ void usage(char *argv[])
         " -W --width      \033[3mCrop the animation to the given width\033[0m\n"
         " -H --height     \033[3mCrop the animation to the given "
         "height\033[0m\n"
+        " -b --bench      \033[3mEnter benchmark mode\033[0m\n"
         " -h --help       \033[3mShow this help message.\033[0m\n",
         argv[0]);
 }
@@ -270,11 +298,12 @@ int main(int argc, char **argv)
                                         {"max-cols", required_argument, 0, 'C'},
                                         {"width", required_argument, 0, 'W'},
                                         {"height", required_argument, 0, 'H'},
+                                        {"bench", required_argument, 0, 'b'},
                                         {0, 0, 0, 0}};
 
     /* Process arguments */
     int index, c;
-    while ((c = getopt_long(argc, argv, "eshiItnf:r:R:c:C:W:H:", long_opts,
+    while ((c = getopt_long(argc, argv, "beshiItnf:r:R:c:C:W:H:", long_opts,
                             &index)) != -1) {
         if (!c) {
             if (long_opts[index].flag == 0) {
@@ -317,6 +346,11 @@ int main(int argc, char **argv)
         case 'H':
             min_row = (FRAME_HEIGHT - atoi(optarg)) / 2;
             max_row = (FRAME_HEIGHT + atoi(optarg)) / 2;
+            break;
+        case 'b':
+            bench = 1;
+            if (!frame_count)
+                frame_count = 5000;
             break;
         default:
             break;
@@ -370,6 +404,8 @@ int main(int argc, char **argv)
             ttype = 1; /* simple terminal is xterm-256color-compatible */
         }
     }
+
+    clock_gettime(CLOCK_REALTIME, &start);
 
     int always_escape = 0; /* Used for text mode */
 
@@ -533,13 +569,11 @@ int main(int argc, char **argv)
     time_t start, current;
     time(&start);
 
-    int playing =
-        1;        /* Animation should continue [left here for modifications] */
-    size_t i = 0; /* Current frame # */
+    size_t i = 0;       /* Current frame # */
     unsigned int f = 0; /* Total frames passed */
     char last = 0;      /* Last color index rendered */
     int y, x;           /* x/y coordinates of what we're drawing */
-    while (playing) {
+    while (1) {
         pthread_mutex_lock(&print_lock);
 
         /* Reset cursor */
@@ -548,6 +582,7 @@ int main(int argc, char **argv)
         } else {
             printf("\033[u");
         }
+
         /* Render the frame */
         for (y = min_row; y < max_row; ++y) {
             for (x = min_col; x < max_col; ++x) {
@@ -632,8 +667,10 @@ int main(int argc, char **argv)
 
         pthread_mutex_unlock(&print_lock);
 
-        /* Wait */
-        usleep(90000);
+        if (!bench) {
+            /* Wait */
+            usleep(90000);
+        }
     }
     return 0;
 }
